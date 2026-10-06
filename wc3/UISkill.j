@@ -5,6 +5,12 @@
 //   아이콘 / 이름 / 레벨 / 현재효과 / 다음효과 / 강화비용 / 강화버튼
 // 강화: DzSyncData → 실버 차감 + SkillUpgrade + RecalcStats
 // 캡션바 드래그로 이동.
+//
+// 보조스킬창 (별도 창, 스킬창 오른쪽에 붙어서 같이 이동)
+//   스킬창 우측 하단 [보조스킬] 버튼으로 열기/닫기
+//   프리셋 3개: 적용 중인 프리셋 = 실제 장착 상태(AuxEquippedAt 등)
+//               나머지 프리셋 = 이 파일의 auxPreset 에 저장
+//   [적용] : 보고 있는 프리셋으로 실제 장착 교체 (이미 적용된 프리셋이면 비활성)
 // ============================================================
 
 scope UISkill initializer onInit
@@ -25,14 +31,23 @@ scope UISkill initializer onInit
     globals
         private constant string SYNC_SKILLUP = "SKSKILLUP"
         private constant string SYNC_AUX_EQ = "SKAUXEQ"      /* 보조스킬 장착 (data=ridx) */
-        private constant string SYNC_AUX_UNEQ = "SKAUXUEQ"   /* 보조스킬 해제 (data=slot) */
-        private constant real SK_W = 880.0       /* 전체 창 폭 (좌:카드 / 우:보조스킬) */
+        private constant string SYNC_AUX_UNEQ = "SKAUXUEQ"   /* 보조스킬 해제 (data=preset*1000+slot) */
+        private constant string SYNC_AUX_PRESET = "SKAUXPS"  /* 프리셋 탭 선택 (data=preset) */
+        private constant string SYNC_AUX_CLEAR = "SKAUXCL"   /* 프리셋 전체 해제 (data=preset) */
+        private constant string SYNC_AUX_APPLY = "SKAUXAP"   /* 프리셋 적용 (data=preset) */
+        private constant real SK_W = 512.0       /* 스킬창 폭 (보조스킬은 별도 창으로 분리) */
         private constant real CARD_W = 512.0     /* 좌측 카드 컬럼 폭 */
-        private constant real AUXX = 530.0       /* 우측 보조스킬 패널 시작 x */
         private constant real SK_H = 690.0
         private constant integer SK_CARDS = 4    /* 동시 표시 카드 칸 수(스크롤 창 크기) */
-        private constant integer AUX_ROWS = 6    /* 보유 보조스킬 동시 표시 행 수(스크롤 창 크기) */
-        private constant integer AUX_ROW_Y = 310 /* 보유 목록 시작 Y (휠영역/스크롤바 기준) */
+
+        // 보조스킬창 (별도 창)
+        private constant integer AUX_W = 348      /* 보조스킬창 폭 */
+        private constant integer AUX_H = 690      /* 보조스킬창 높이 (스킬창과 동일) */
+        private constant integer AX = 16          /* 보조스킬창 안쪽 시작 x */
+        private constant integer AUX_PRESETS = 3  /* 프리셋 수 */
+        private constant integer AUX_SLOT_SHOW = 4 /* 표시할 장착 슬롯 칸 수 (AUX_SLOTS 초과분은 잠김 표시, AUX_SLOTS 보다 작으면 안 됨) */
+        private constant integer AUX_ROWS = 4    /* 보유 보조스킬 동시 표시 행 수(스크롤 창 크기) */
+        private constant integer AUX_ROW_Y = 372 /* 보유 목록 시작 Y (휠영역/스크롤바 기준) */
         private constant integer AUX_ROW_H = 58  /* 보유 목록 행 1칸 높이=간격 */
         private constant real SK_ROW_Y = 54.0    /* 카드 시작 Y (스크롤바/휠영역 기준) */
         private constant real SK_ROW_H = 150.0   /* 카드 1장 높이=간격 */
@@ -61,7 +76,17 @@ scope UISkill initializer onInit
         private integer skScrollTrack = 0
         private integer skScrollThumb = 0
 
-        // 보조 스킬 패널 (우측)
+        // 보조 스킬 창 (별도 창)
+        private integer auxRoot = 0
+        private integer auxToggleLbl = 0     /* 스킬창 우측 하단 토글 버튼 글자 */
+        private integer auxCountText = 0
+        private integer array auxPresetBg
+        private integer array auxPresetLbl
+        private integer auxApplyBg = 0
+        private integer auxApplyLbl = 0
+        private integer auxAppliedText = 0
+        private integer lastBtnBg = 0        /* createTextButton 결과 (bg/라벨) */
+        private integer lastBtnLbl = 0
         private integer auxTitle = 0
         private integer auxSlotLabel = 0
         private integer array auxSlotBg
@@ -73,6 +98,13 @@ scope UISkill initializer onInit
         private integer array auxRowIcon
         private integer array auxRowText
         private integer array auxRowBtn
+        private integer array auxRowLbl
+
+        // 보조스킬 프리셋 (동기화 상태 — sync 핸들러에서만 변경)
+        private integer array auxView        /* [pid] 보고 있는 프리셋 */
+        private integer array auxApplied     /* [pid] 실제 장착에 적용된 프리셋 */
+        private integer array auxPreset      /* [(pid*AUX_PRESETS+preset)*AUX_SLOT_SHOW+slot] = ridx+1 (0=비어 있음), 적용 안 된 프리셋만 사용 */
+        private boolean array auxVisible     /* [pid] 보조스킬창 열림 (로컬 표시 상태) */
 
         // 보유 보조스킬 스크롤 (보조스킬 종류 > 행 칸 AUX_ROWS 개)
         private integer array auxScroll      /* [pid] 보유 목록 스크롤 오프셋 */
@@ -195,13 +227,71 @@ scope UISkill initializer onInit
         return n
     endfunction
 
-    // 보조 스킬 패널 갱신 (장착 슬롯 + 보유 목록)
+    // ============================================================
+    // 보조스킬 프리셋
+    // ============================================================
+
+    private function presetIdx takes integer pid, integer p, integer slot returns integer
+        return (pid * AUX_PRESETS + p) * AUX_SLOT_SHOW + slot
+    endfunction
+
+    // 프리셋 p 의 slot 에 장착된 보조스킬 (-1 = 비어 있음)
+    //   적용 중인 프리셋은 실제 장착 상태를 그대로 읽는다.
+    private function presetAt takes integer pid, integer p, integer slot returns integer
+        if p == auxApplied[pid] then
+            return AuxEquippedAt(pid, slot)
+        endif
+        return auxPreset[presetIdx(pid, p, slot)] - 1
+    endfunction
+
+    // 프리셋 p 에서 ridx 가 장착된 슬롯 (-1 = 없음)
+    private function presetSlotOf takes integer pid, integer p, integer ridx returns integer
+        local integer slot = 0
+        loop
+            exitwhen slot >= AUX_SLOTS
+            if presetAt(pid, p, slot) == ridx then
+                return slot
+            endif
+            set slot = slot + 1
+        endloop
+        return -1
+    endfunction
+
+    private function presetCount takes integer pid, integer p returns integer
+        local integer slot = 0
+        local integer n = 0
+        loop
+            exitwhen slot >= AUX_SLOTS
+            if presetAt(pid, p, slot) >= 0 then
+                set n = n + 1
+            endif
+            set slot = slot + 1
+        endloop
+        return n
+    endfunction
+
+    private function presetFirstFree takes integer pid, integer p returns integer
+        local integer slot = 0
+        loop
+            exitwhen slot >= AUX_SLOTS
+            if presetAt(pid, p, slot) < 0 then
+                return slot
+            endif
+            set slot = slot + 1
+        endloop
+        return -1
+    endfunction
+
+    // 보조 스킬 창 갱신 (토글 버튼 + 프리셋 + 장착 슬롯 + 보유 목록 + 적용 버튼)
     //   보유 목록은 AUX_ROWS 칸짜리 스크롤 창이다. 보유 종류가 칸 수를 넘으면 휠로 넘긴다.
     //   (2026-09-20: 보조스킬이 9종이 되면서 7번째부터 영영 안 보이던 것을 고침)
     private function renderAuxPanel takes integer pid returns nothing
+        local integer view = auxView[pid]
+        local integer eqCnt = presetCount(pid, view)
         local integer slot = 0
         local integer i = 0
         local integer row = 0
+        local integer p = 0
         local integer ridx
         local integer owned
         local integer seen = 0
@@ -211,18 +301,55 @@ scope UISkill initializer onInit
         local real thumbH
         local real thumbY
         local string eqMark
+        local string cnt
 
+        call GUIShow(auxRoot, auxVisible[pid])
+
+        // 스킬창 우측 하단 토글 버튼
+        set cnt = "|cff8FA8C8(" + I2S(presetCount(pid, auxApplied[pid])) + "/" + I2S(AUX_SLOTS) + ")|r"
+        if auxVisible[pid] then
+            call GUISetText(auxToggleLbl, "|cffd4af37◀ 보조스킬|r " + cnt)
+        else
+            call GUISetText(auxToggleLbl, "|cffd4af37보조스킬 ▶|r " + cnt)
+        endif
+
+        if not auxVisible[pid] then
+            return
+        endif
+
+        call GUISetText(auxCountText, "|cff8FA8C8장착 " + I2S(eqCnt) + " / " + I2S(AUX_SLOTS) + "|r")
+
+        // 프리셋 탭
         loop
-            exitwhen slot >= AUX_SLOTS
-            set ridx = AuxEquippedAt(pid, slot)
-            if ridx >= 0 then
-                call GUISetImage(auxSlotIcon[slot], AuxIcon(ridx))
-                call GUISetAlpha(auxSlotIcon[slot], 255)
-                call GUISetText(auxSlotText[slot], "|cffd8d0c0" + AuxName(ridx) + "|r |cff8FA8C8Lv." + I2S(AuxLv(pid, ridx)) + "|r|n|cffAEB9C6좌클릭 해제|r")
+            exitwhen p >= AUX_PRESETS
+            if p == view then
+                call GUISetAlpha(auxPresetBg[p], 255)
+                call GUISetText(auxPresetLbl[p], "|cffd4af37" + I2S(p + 1) + "|r")
             else
+                call GUISetAlpha(auxPresetBg[p], 110)
+                call GUISetText(auxPresetLbl[p], "|cff8FA8C8" + I2S(p + 1) + "|r")
+            endif
+            set p = p + 1
+        endloop
+
+        // 장착 슬롯 (AUX_SLOTS 이후 칸은 잠김)
+        loop
+            exitwhen slot >= AUX_SLOT_SHOW
+            if slot >= AUX_SLOTS then
                 call GUISetImage(auxSlotIcon[slot], "UI_Slot_Basic.tga")
-                call GUISetAlpha(auxSlotIcon[slot], 110)
-                call GUISetText(auxSlotText[slot], "|cff5a564c(비어 있음)|r")
+                call GUISetAlpha(auxSlotIcon[slot], 60)
+                call GUISetText(auxSlotText[slot], "|cff5a564c잠긴 슬롯|r")
+            else
+                set ridx = presetAt(pid, view, slot)
+                if ridx >= 0 then
+                    call GUISetImage(auxSlotIcon[slot], AuxIcon(ridx))
+                    call GUISetAlpha(auxSlotIcon[slot], 255)
+                    call GUISetText(auxSlotText[slot], "|cffd8d0c0" + AuxName(ridx) + "|r |cff8FA8C8Lv." + I2S(AuxLv(pid, ridx)) + "|r|n|cffAEB9C6좌클릭 해제|r")
+                else
+                    call GUISetImage(auxSlotIcon[slot], "UI_Slot_Basic.tga")
+                    call GUISetAlpha(auxSlotIcon[slot], 110)
+                    call GUISetText(auxSlotText[slot], "|cff5a564c(비어 있음)|r")
+                endif
             endif
             set slot = slot + 1
         endloop
@@ -246,8 +373,13 @@ scope UISkill initializer onInit
             if AuxOwns(pid, i) then
                 if seen >= off and row < AUX_ROWS then
                     set eqMark = ""
-                    if AuxIsEquipped(pid, i) then
+                    if presetSlotOf(pid, view, i) >= 0 then
                         set eqMark = "|cff44FF44[장착중] |r"
+                        call GUISetText(auxRowLbl[row], "|cffAEB9C6해제|r")
+                    elseif eqCnt >= AUX_SLOTS then
+                        call GUISetText(auxRowLbl[row], "|cff5a564c가득|r")
+                    else
+                        call GUISetText(auxRowLbl[row], "|cffd4af37장착|r")
                     endif
                     call GUIShow(auxRowBg[row], true)
                     call GUIShow(auxRowIcon[row], true)
@@ -285,9 +417,19 @@ scope UISkill initializer onInit
             endif
             set thumbY = I2R(AUX_ROW_Y) + (trackH - thumbH) * I2R(off) / I2R(maxOff)
             call GUIClearAllPoints(auxScrollThumb)
-            call GUISetPoint(auxScrollThumb, skRoot, R2I(AUXX) + 306, R2I(thumbY))
+            call GUISetPoint(auxScrollThumb, auxRoot, AX + 306, R2I(thumbY))
             call GUISetSize(auxScrollThumb, 10, thumbH)
         endif
+
+        // 적용 버튼 (이미 적용된 프리셋이면 비활성 표시)
+        if view == auxApplied[pid] then
+            call GUISetAlpha(auxApplyBg, 90)
+            call GUISetText(auxApplyLbl, "|cff6f7890적용됨|r")
+        else
+            call GUISetAlpha(auxApplyBg, 230)
+            call GUISetText(auxApplyLbl, "|cffd4af37적  용|r")
+        endif
+        call GUISetText(auxAppliedText, "|cff8FA8C8현재 적용:|r |cffd8d0c0프리셋 " + I2S(auxApplied[pid] + 1) + "|r")
     endfunction
 
     private function update takes nothing returns nothing
@@ -486,16 +628,77 @@ scope UISkill initializer onInit
         call DzSyncData(SYNC_SKILLUP, I2S(slot))
     endfunction
 
-    // 보조스킬 장착 슬롯 클릭 → 해제
-    private function onAuxSlotClick takes nothing returns nothing
-        call SfxClick(GetPlayerId(GetLocalPlayer()))
-        call DzSyncData(SYNC_AUX_UNEQ, I2S(LoadInteger(memHash, DzGetTriggerUIEventFrame(), 0)))
+    // 스킬창 우측 하단 [보조스킬] 버튼 → 보조스킬창 열기/닫기 (로컬 표시만)
+    private function onAuxToggle takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        call SfxClick(pid)
+        set auxVisible[pid] = not auxVisible[pid]
+        call update()
     endfunction
 
-    // 보유 보조스킬 [장착] 클릭 → 빈 슬롯 장착
+    private function onAuxClose takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        call SfxClick(pid)
+        set auxVisible[pid] = false
+        call update()
+    endfunction
+
+    // 프리셋 탭 클릭 → 보고 있는 프리셋 변경
+    private function onAuxPresetClick takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        local integer p = LoadInteger(memHash, DzGetTriggerUIEventFrame(), 0)
+        call SfxClick(pid)
+        if p != auxView[pid] then
+            call DzSyncData(SYNC_AUX_PRESET, I2S(p))
+        endif
+    endfunction
+
+    // [전체 해제] → 보고 있는 프리셋 비우기
+    private function onAuxClearClick takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        call SfxClick(pid)
+        if presetCount(pid, auxView[pid]) > 0 then
+            call DzSyncData(SYNC_AUX_CLEAR, I2S(auxView[pid]))
+        endif
+    endfunction
+
+    // [적용] → 보고 있는 프리셋으로 실제 장착 교체 (이미 적용된 프리셋이면 무시)
+    private function onAuxApplyClick takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        if auxView[pid] == auxApplied[pid] then
+            return
+        endif
+        call SfxClick(pid)
+        call DzSyncData(SYNC_AUX_APPLY, I2S(auxView[pid]))
+    endfunction
+
+    // 보조스킬 장착 슬롯 클릭 → 해제
+    private function onAuxSlotClick takes nothing returns nothing
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        local integer slot = LoadInteger(memHash, DzGetTriggerUIEventFrame(), 0)
+        local integer view = auxView[pid]
+        if slot >= AUX_SLOTS then
+            return
+        endif
+        if presetAt(pid, view, slot) < 0 then
+            return
+        endif
+        call SfxClick(pid)
+        call DzSyncData(SYNC_AUX_UNEQ, I2S(view * 1000 + slot))
+    endfunction
+
+    // 보유 보조스킬 버튼 클릭 → 장착중이면 해제, 아니면 빈 슬롯 장착
     private function onAuxRowClick takes nothing returns nothing
-        call SfxClick(GetPlayerId(GetLocalPlayer()))
-        call DzSyncData(SYNC_AUX_EQ, I2S(LoadInteger(memHash, DzGetTriggerUIEventFrame(), 0)))
+        local integer pid = GetPlayerId(GetLocalPlayer())
+        local integer ridx = LoadInteger(memHash, DzGetTriggerUIEventFrame(), 0)
+        local integer view = auxView[pid]
+        local integer slot = presetSlotOf(pid, view, ridx)
+        call SfxClick(pid)
+        if slot >= 0 then
+            call DzSyncData(SYNC_AUX_UNEQ, I2S(view * 1000 + slot))
+        elseif presetCount(pid, view) < AUX_SLOTS then
+            call DzSyncData(SYNC_AUX_EQ, I2S(view * 1000 + ridx))
+        endif
     endfunction
 
     private function onCapEnter takes nothing returns nothing
@@ -574,32 +777,139 @@ scope UISkill initializer onInit
         call MsgSuccess(Player(pid), SkillNameFor(pid, slot) + " Lv." + I2S(SkillGetLevel(pid, slot)) + " 강화 성공!")
     endfunction
 
-    // 보조스킬 장착 (빈 슬롯)
+    // 보조스킬 장착 (빈 슬롯)  data = preset*1000 + ridx
+    //   적용 중인 프리셋이면 실제 장착, 아니면 프리셋 저장만
     private function onSyncAuxEq takes nothing returns nothing
         local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
-        local integer ridx = S2I(DzGetTriggerSyncData())
-        if not AuxOwns(pid, ridx) or AuxIsEquipped(pid, ridx) then
+        local integer data = S2I(DzGetTriggerSyncData())
+        local integer p = data / 1000
+        local integer ridx = data - p * 1000
+        local integer slot
+        if p != auxView[pid] then
             return
         endif
-        if AuxEquipFirstFree(pid, ridx) then
-            call RecalcStats(pid)
-            call AuxApplyHeroAbilities(pid)
-            call MsgSuccess(Player(pid), AuxName(ridx) + " 장착!")
+        if not AuxOwns(pid, ridx) or presetSlotOf(pid, p, ridx) >= 0 then
+            return
+        endif
+        if p == auxApplied[pid] then
+            if AuxEquipFirstFree(pid, ridx) then
+                call RecalcStats(pid)
+                call AuxApplyHeroAbilities(pid)
+                call MsgSuccess(Player(pid), AuxName(ridx) + " 장착!")
+            else
+                call MsgError(Player(pid), "장착 슬롯이 가득 찼습니다. (슬롯을 좌클릭해 해제하세요)")
+            endif
         else
-            call MsgError(Player(pid), "장착 슬롯이 가득 찼습니다. (슬롯을 좌클릭해 해제하세요)")
+            set slot = presetFirstFree(pid, p)
+            if slot >= 0 then
+                set auxPreset[presetIdx(pid, p, slot)] = ridx + 1
+            else
+                call MsgError(Player(pid), "장착 슬롯이 가득 찼습니다. (슬롯을 좌클릭해 해제하세요)")
+            endif
         endif
         call update()
     endfunction
 
-    // 보조스킬 해제 (슬롯)
+    // 보조스킬 해제 (슬롯)  data = preset*1000 + slot
     private function onSyncAuxUneq takes nothing returns nothing
         local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
-        local integer slot = S2I(DzGetTriggerSyncData())
-        if AuxUnequip(pid, slot) then
+        local integer data = S2I(DzGetTriggerSyncData())
+        local integer p = data / 1000
+        local integer slot = data - p * 1000
+        if p != auxView[pid] or slot < 0 or slot >= AUX_SLOTS then
+            return
+        endif
+        if p == auxApplied[pid] then
+            if AuxUnequip(pid, slot) then
+                call RecalcStats(pid)
+                call AuxApplyHeroAbilities(pid)
+            endif
+        else
+            set auxPreset[presetIdx(pid, p, slot)] = 0
+        endif
+        call update()
+    endfunction
+
+    // 프리셋 탭 선택
+    private function onSyncAuxPreset takes nothing returns nothing
+        local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
+        local integer p = S2I(DzGetTriggerSyncData())
+        if p < 0 or p >= AUX_PRESETS then
+            return
+        endif
+        set auxView[pid] = p
+        call update()
+    endfunction
+
+    // 실제 장착 전부 해제 (뒤 슬롯부터 — AuxUnequip 이 슬롯을 당겨도 안전)
+    private function auxUnequipAll takes integer pid returns nothing
+        local integer slot = AUX_SLOTS - 1
+        loop
+            exitwhen slot < 0
+            if AuxEquippedAt(pid, slot) >= 0 then
+                call AuxUnequip(pid, slot)
+            endif
+            set slot = slot - 1
+        endloop
+    endfunction
+
+    // 프리셋 전체 해제
+    private function onSyncAuxClear takes nothing returns nothing
+        local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
+        local integer p = S2I(DzGetTriggerSyncData())
+        local integer slot = 0
+        if p != auxView[pid] then
+            return
+        endif
+        if p == auxApplied[pid] then
+            call auxUnequipAll(pid)
             call RecalcStats(pid)
             call AuxApplyHeroAbilities(pid)
-            call update()
+        else
+            loop
+                exitwhen slot >= AUX_SLOT_SHOW
+                set auxPreset[presetIdx(pid, p, slot)] = 0
+                set slot = slot + 1
+            endloop
         endif
+        call update()
+    endfunction
+
+    // 프리셋 적용: 현재 장착을 이전 프리셋에 저장 → 전부 해제 → 새 프리셋 장착
+    private function onSyncAuxApply takes nothing returns nothing
+        local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
+        local integer p = S2I(DzGetTriggerSyncData())
+        local integer old = auxApplied[pid]
+        local integer slot = 0
+        local integer ridx
+        if p != auxView[pid] or p == old or p < 0 or p >= AUX_PRESETS then
+            return
+        endif
+
+        // 현재 실제 장착 상태를 이전 프리셋에 저장
+        loop
+            exitwhen slot >= AUX_SLOTS
+            set auxPreset[presetIdx(pid, old, slot)] = AuxEquippedAt(pid, slot) + 1
+            set slot = slot + 1
+        endloop
+
+        call auxUnequipAll(pid)
+
+        set slot = 0
+        loop
+            exitwhen slot >= AUX_SLOTS
+            set ridx = auxPreset[presetIdx(pid, p, slot)] - 1
+            if ridx >= 0 and AuxOwns(pid, ridx) and not AuxIsEquipped(pid, ridx) then
+                call AuxEquipFirstFree(pid, ridx)
+            endif
+            set slot = slot + 1
+        endloop
+
+        set auxApplied[pid] = p
+        call RecalcStats(pid)
+        call AuxApplyHeroAbilities(pid)
+        call MsgSuccess(Player(pid), "보조스킬 프리셋 " + I2S(p + 1) + " 적용!")
+        call update()
     endfunction
 
     // ============================================================
@@ -670,87 +980,150 @@ scope UISkill initializer onInit
         call GUISetText(lbl, "|cffd4af37강  화|r")
     endfunction
 
-    // 보조 스킬 패널 생성 (우측)
+    // 배경 이미지 + 투명 버튼 + 가운데 글자 버튼. 버튼을 돌려주고 bg/글자는 lastBtnBg/lastBtnLbl 에.
+    private function createTextButton takes integer parent, integer x, integer y, integer w, integer h, code onClick returns integer
+        local integer btn
+        set lastBtnBg = GUICreateImage(parent)
+        call GUISetPoint(lastBtnBg, parent, x, y)
+        call GUISetSize(lastBtnBg, w, h)
+        call GUISetImage(lastBtnBg, "UI_plate_none.tga")
+        call GUISetAlpha(lastBtnBg, 220)
+
+        set btn = GUICreateButton(parent)
+        call GUISetPoint(btn, parent, x, y)
+        call GUISetSize(btn, w, h)
+        call DzFrameSetScriptByCode(btn, 1, onClick, false)
+
+        set lastBtnLbl = GUICreateText(btn)
+        call GUISetPointEx(lastBtnLbl, GUI_DOCK_MIDDLECENTER, btn, GUI_DOCK_MIDDLECENTER, 0, 0)
+        call GUISetFont(lastBtnLbl, MAP_FONT_BOLD, 13)
+        return btn
+    endfunction
+
+    // 보조 스킬 창 생성 (별도 창 — 스킬창 오른쪽에 붙어서 같이 이동/숨김)
     private function createAuxPanel takes nothing returns nothing
         local integer slot = 0
         local integer row = 0
-        local integer lbl
+        local integer p = 0
+        local integer btn
+        local integer tempFrame
         local integer cy
 
-        set auxTitle = GUICreateText(skRoot)
-        call GUISetPoint(auxTitle, skRoot, R2I(AUXX), 50)
+        // skLayer 자식 + skRoot 기준 위치 → 스킬창 닫으면 같이 숨고, 드래그하면 같이 이동
+        set auxRoot = GUICreateContainer(skLayer)
+        call GUISetPoint(auxRoot, skRoot, R2I(SK_W) + 8, 0)
+        call GUISetSize(auxRoot, AUX_W, AUX_H)
+
+        set tempFrame = GUICreateImage(auxRoot)
+        call GUISetPoint(tempFrame, auxRoot, 0, 0)
+        call GUISetSize(tempFrame, AUX_W, AUX_H)
+        call GUISetImage(tempFrame, "UI_plate_none.tga")
+        call GUISetAlpha(tempFrame, 235)
+
+        set auxTitle = GUICreateText(auxRoot)
+        call GUISetPoint(auxTitle, auxRoot, AX, 12)
         call GUISetFont(auxTitle, MAP_FONT_BOLD, 18)
         call GUISetText(auxTitle, "|cffFF66CC보조 스킬|r")
 
-        set auxSlotLabel = GUICreateText(skRoot)
-        call GUISetPoint(auxSlotLabel, skRoot, R2I(AUXX), 82)
+        set auxCountText = GUICreateText(auxRoot)
+        call GUISetPoint(auxCountText, auxRoot, AX + 100, 18)
+        call GUISetFont(auxCountText, MAP_FONT_LIGHT, 12)
+
+        set btn = GUICreateButton(auxRoot)
+        call GUISetPoint(btn, auxRoot, AUX_W - 40, 8)
+        call GUISetSize(btn, 32, 32)
+        call DzFrameSetScriptByCode(btn, 1, function onAuxClose, false)
+        set tempFrame = GUICreateImage(btn)
+        call GUISetPoint(tempFrame, btn, 0, 0)
+        call GUISetSize(tempFrame, 32, 32)
+        call GUISetImage(tempFrame, "UI_icon_close.tga")
+
+        // 프리셋 탭 + 전체 해제
+        set tempFrame = GUICreateText(auxRoot)
+        call GUISetPoint(tempFrame, auxRoot, AX, 57)
+        call GUISetFont(tempFrame, MAP_FONT_LIGHT, 12)
+        call GUISetText(tempFrame, "|cff8FA8C8프리셋|r")
+        loop
+            exitwhen p >= AUX_PRESETS
+            set btn = createTextButton(auxRoot, AX + 52 + p * 46, 50, 40, 30, function onAuxPresetClick)
+            call SaveInteger(memHash, btn, 0, p)
+            set auxPresetBg[p] = lastBtnBg
+            set auxPresetLbl[p] = lastBtnLbl
+            call GUISetFont(lastBtnLbl, MAP_FONT_BOLD, 15)
+            set p = p + 1
+        endloop
+        call createTextButton(auxRoot, AUX_W - AX - 84, 50, 84, 30, function onAuxClearClick)
+        call GUISetText(lastBtnLbl, "|cffAEB9C6전체 해제|r")
+
+        set auxSlotLabel = GUICreateText(auxRoot)
+        call GUISetPoint(auxSlotLabel, auxRoot, AX, 92)
         call GUISetFont(auxSlotLabel, MAP_FONT_LIGHT, 12)
         call GUISetText(auxSlotLabel, "|cff8FA8C8장착 슬롯 (좌클릭 해제)|r")
 
         loop
-            exitwhen slot >= AUX_SLOTS
-            set cy = 104 + slot * 58
-            set auxSlotBg[slot] = GUICreateImage(skRoot)
-            call GUISetPoint(auxSlotBg[slot], skRoot, R2I(AUXX), cy)
+            exitwhen slot >= AUX_SLOT_SHOW
+            set cy = 112 + slot * 58
+            set auxSlotBg[slot] = GUICreateImage(auxRoot)
+            call GUISetPoint(auxSlotBg[slot], auxRoot, AX, cy)
             call GUISetSize(auxSlotBg[slot], 300, 52)
             call GUISetImage(auxSlotBg[slot], "UI_plate_none.tga")
             call GUISetAlpha(auxSlotBg[slot], 160)
 
-            set auxSlotIcon[slot] = GUICreateImage(skRoot)
-            call GUISetPoint(auxSlotIcon[slot], skRoot, R2I(AUXX) + 8, cy + 6)
+            set auxSlotIcon[slot] = GUICreateImage(auxRoot)
+            call GUISetPoint(auxSlotIcon[slot], auxRoot, AX + 8, cy + 6)
             call GUISetSize(auxSlotIcon[slot], 40, 40)
 
-            set auxSlotText[slot] = GUICreateText(skRoot)
-            call GUISetPoint(auxSlotText[slot], skRoot, R2I(AUXX) + 56, cy + 8)
+            set auxSlotText[slot] = GUICreateText(auxRoot)
+            call GUISetPoint(auxSlotText[slot], auxRoot, AX + 56, cy + 8)
             call GUISetSize(auxSlotText[slot], 236, 44)
             call GUISetFont(auxSlotText[slot], MAP_FONT_LIGHT, 12)
 
-            set auxSlotBtn[slot] = GUICreateButton(skRoot)
-            call GUISetPoint(auxSlotBtn[slot], skRoot, R2I(AUXX), cy)
+            set auxSlotBtn[slot] = GUICreateButton(auxRoot)
+            call GUISetPoint(auxSlotBtn[slot], auxRoot, AX, cy)
             call GUISetSize(auxSlotBtn[slot], 300, 52)
             call DzFrameSetScriptByCode(auxSlotBtn[slot], 1, function onAuxSlotClick, false)
             call SaveInteger(memHash, auxSlotBtn[slot], 0, slot)
             set slot = slot + 1
         endloop
 
-        set auxOwnedLabel = GUICreateText(skRoot)
-        call GUISetPoint(auxOwnedLabel, skRoot, R2I(AUXX), 288)
+        set auxOwnedLabel = GUICreateText(auxRoot)
+        call GUISetPoint(auxOwnedLabel, auxRoot, AX, AUX_ROW_Y - 22)
         call GUISetFont(auxOwnedLabel, MAP_FONT_LIGHT, 12)
-        call GUISetText(auxOwnedLabel, "|cff8FA8C8보유 스킬 ([장착] 클릭 · 휠 스크롤)|r")
+        call GUISetText(auxOwnedLabel, "|cff8FA8C8보유 스킬 (휠 스크롤)|r")
 
         // 보유 목록 휠 스크롤 영역 (MS_WheelArea 투명버튼 — 행보다 먼저 생성해 [장착] 버튼이 위에 옴)
-        set auxWheelArea = MSFdfCreateWheelArea(skRoot)
-        call GUISetPoint(auxWheelArea, skRoot, R2I(AUXX), AUX_ROW_Y)
+        set auxWheelArea = MSFdfCreateWheelArea(auxRoot)
+        call GUISetPoint(auxWheelArea, auxRoot, AX, AUX_ROW_Y)
         call GUISetSize(auxWheelArea, 300, AUX_ROW_H * AUX_ROWS)
         call DzFrameSetScriptByCode(auxWheelArea, 6, function onAuxWheel, false)
 
         loop
             exitwhen row >= AUX_ROWS
             set cy = AUX_ROW_Y + row * AUX_ROW_H
-            set auxRowBg[row] = GUICreateImage(skRoot)
-            call GUISetPoint(auxRowBg[row], skRoot, R2I(AUXX), cy)
+            set auxRowBg[row] = GUICreateImage(auxRoot)
+            call GUISetPoint(auxRowBg[row], auxRoot, AX, cy)
             call GUISetSize(auxRowBg[row], 300, 52)
             call GUISetImage(auxRowBg[row], "UI_plate_none.tga")
             call GUISetAlpha(auxRowBg[row], 120)
 
-            set auxRowIcon[row] = GUICreateImage(skRoot)
-            call GUISetPoint(auxRowIcon[row], skRoot, R2I(AUXX) + 8, cy + 6)
+            set auxRowIcon[row] = GUICreateImage(auxRoot)
+            call GUISetPoint(auxRowIcon[row], auxRoot, AX + 8, cy + 6)
             call GUISetSize(auxRowIcon[row], 40, 40)
 
-            set auxRowText[row] = GUICreateText(skRoot)
-            call GUISetPoint(auxRowText[row], skRoot, R2I(AUXX) + 56, cy + 6)
+            set auxRowText[row] = GUICreateText(auxRoot)
+            call GUISetPoint(auxRowText[row], auxRoot, AX + 56, cy + 6)
             call GUISetSize(auxRowText[row], 168, 44)
             call GUISetFont(auxRowText[row], MAP_FONT_LIGHT, 11)
 
-            set auxRowBtn[row] = GUICreateButton(skRoot)
-            call GUISetPoint(auxRowBtn[row], skRoot, R2I(AUXX) + 232, cy + 12)
+            set auxRowBtn[row] = GUICreateButton(auxRoot)
+            call GUISetPoint(auxRowBtn[row], auxRoot, AX + 232, cy + 12)
             call GUISetSize(auxRowBtn[row], 62, 28)
             call DzFrameSetScriptByCode(auxRowBtn[row], 1, function onAuxRowClick, false)
             call DzFrameSetScriptByCode(auxRowBtn[row], 6, function onAuxWheel, false)
-            set lbl = GUICreateText(auxRowBtn[row])
-            call GUISetPointEx(lbl, GUI_DOCK_MIDDLECENTER, auxRowBtn[row], GUI_DOCK_MIDDLECENTER, 0, 0)
-            call GUISetFont(lbl, MAP_FONT_BOLD, 12)
-            call GUISetText(lbl, "|cffd4af37장착|r")
+            set auxRowLbl[row] = GUICreateText(auxRowBtn[row])
+            call GUISetPointEx(auxRowLbl[row], GUI_DOCK_MIDDLECENTER, auxRowBtn[row], GUI_DOCK_MIDDLECENTER, 0, 0)
+            call GUISetFont(auxRowLbl[row], MAP_FONT_BOLD, 12)
+            call GUISetText(auxRowLbl[row], "|cffd4af37장착|r")
 
             call GUIShow(auxRowBg[row], false)
             call GUIShow(auxRowIcon[row], false)
@@ -760,19 +1133,31 @@ scope UISkill initializer onInit
         endloop
 
         // 스크롤 위치바 (track 고정 + thumb 위치표시) — image라 입력 비소비
-        set auxScrollTrack = GUICreateImage(skRoot)
-        call GUISetPoint(auxScrollTrack, skRoot, R2I(AUXX) + 306, AUX_ROW_Y)
+        set auxScrollTrack = GUICreateImage(auxRoot)
+        call GUISetPoint(auxScrollTrack, auxRoot, AX + 306, AUX_ROW_Y)
         call GUISetSize(auxScrollTrack, 10, AUX_ROW_H * AUX_ROWS)
         call GUISetImage(auxScrollTrack, "UI_scroll_track.tga")
         call GUISetAlpha(auxScrollTrack, 255)
         call GUIShow(auxScrollTrack, false)
 
-        set auxScrollThumb = GUICreateImage(skRoot)
-        call GUISetPoint(auxScrollThumb, skRoot, R2I(AUXX) + 306, AUX_ROW_Y)
+        set auxScrollThumb = GUICreateImage(auxRoot)
+        call GUISetPoint(auxScrollThumb, auxRoot, AX + 306, AUX_ROW_Y)
         call GUISetSize(auxScrollThumb, 10, 40)
         call GUISetImage(auxScrollThumb, "UI_scroll_handle.tga")
         call GUISetAlpha(auxScrollThumb, 255)
         call GUIShow(auxScrollThumb, false)
+
+        // 하단: 현재 적용 + [적용]
+        set auxAppliedText = GUICreateText(auxRoot)
+        call GUISetPoint(auxAppliedText, auxRoot, AX, AUX_H - 40)
+        call GUISetFont(auxAppliedText, MAP_FONT_LIGHT, 13)
+
+        call createTextButton(auxRoot, AUX_W - AX - 120, AUX_H - 50, 120, 36, function onAuxApplyClick)
+        set auxApplyBg = lastBtnBg
+        set auxApplyLbl = lastBtnLbl
+        call GUISetFont(auxApplyLbl, MAP_FONT_BOLD, 15)
+
+        call GUIShow(auxRoot, false)
     endfunction
 
     private function onMapLoad takes nothing returns nothing
@@ -842,6 +1227,11 @@ scope UISkill initializer onInit
 
         set skSilverText = GUICreateText(skRoot)
         call GUISetPoint(skSilverText, skRoot, 16, R2I(SK_H) - 28)
+
+        // 스킬창 우측 하단: 보조스킬창 열기/닫기 버튼
+        call createTextButton(skRoot, R2I(SK_W) - 14 - 160, R2I(SK_H) - 34, 160, 30, function onAuxToggle)
+        set auxToggleLbl = lastBtnLbl
+        call GUISetText(auxToggleLbl, "|cffd4af37보조스킬 ▶|r")
     endfunction
 
     // 동적 스킬 툴팁 생성 (gx_cursorFrame 자식 → 마우스 추종)
@@ -901,6 +1291,18 @@ scope UISkill initializer onInit
         set t = CreateTrigger()
         call DzTriggerRegisterSyncData(t, SYNC_AUX_UNEQ, false)
         call TriggerAddAction(t, function onSyncAuxUneq)
+
+        set t = CreateTrigger()
+        call DzTriggerRegisterSyncData(t, SYNC_AUX_PRESET, false)
+        call TriggerAddAction(t, function onSyncAuxPreset)
+
+        set t = CreateTrigger()
+        call DzTriggerRegisterSyncData(t, SYNC_AUX_CLEAR, false)
+        call TriggerAddAction(t, function onSyncAuxClear)
+
+        set t = CreateTrigger()
+        call DzTriggerRegisterSyncData(t, SYNC_AUX_APPLY, false)
+        call TriggerAddAction(t, function onSyncAuxApply)
 
         set t = null
     endfunction
