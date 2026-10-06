@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>스킬창 · 보조스킬</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="subskill.css">
+</head>
+<body>
+  <div class="skill-layout">
+
+    <!-- 스킬창 -->
+    <section class="window skill-window" aria-label="스킬창">
+      <header class="window-header">
+        <h1 class="window-title">스킬</h1>
+        <button type="button" class="icon-btn" aria-label="스킬창 닫기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="skill-body">
+        <!-- 기존 스킬 목록이 들어가는 영역 -->
+      </div>
+
+      <footer class="window-footer">
+        <!-- 우측 하단: 보조스킬창 토글 버튼 -->
+        <button type="button" id="subskill-toggle" class="subskill-toggle"
+                aria-expanded="true" aria-controls="subskill-panel">
+          <span>보조스킬</span>
+          <span class="subskill-toggle__count" id="subskill-toggle-count">0/3</span>
+          <svg class="subskill-toggle__arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </footer>
+    </section>
+
+    <!-- 보조스킬창 -->
+    <section class="window subskill-panel" id="subskill-panel" aria-label="보조스킬창">
+      <header class="window-header">
+        <div class="window-header__left">
+          <h2 class="window-title">보조스킬</h2>
+          <span class="muted" id="subskill-equip-count">장착 0 / 3</span>
+        </div>
+        <button type="button" class="icon-btn" data-action="close" aria-label="보조스킬창 닫기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+
+      <!-- 프리셋 -->
+      <div class="preset-bar">
+        <span class="section-label">프리셋</span>
+        <div class="preset-tabs" id="preset-tabs"></div>
+        <button type="button" class="ghost-btn" data-action="clear">전체 해제</button>
+      </div>
+
+      <!-- 장착 슬롯 -->
+      <div class="slot-grid" id="slot-grid"></div>
+
+      <!-- 보유 보조스킬 -->
+      <div class="owned-header"><span class="section-label">보유 보조스킬</span></div>
+      <div class="owned-list" id="owned-list"></div>
+
+      <!-- 적용 -->
+      <footer class="window-footer subskill-footer">
+        <span class="muted">현재 적용: <strong id="applied-label">프리셋 1</strong></span>
+        <button type="button" class="apply-btn" id="apply-btn" data-action="apply">적용</button>
+      </footer>
+    </section>
+  </div>
+
+  <script src="subskill.js"></script>
+</body>
+</html>
