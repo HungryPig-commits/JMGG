@@ -875,14 +875,12 @@ scope UISkill initializer onInit
         call update()
     endfunction
 
-    // 프리셋 적용: 현재 장착을 이전 프리셋에 저장 → 전부 해제 → 새 프리셋 장착
-    private function onSyncAuxApply takes nothing returns nothing
-        local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
-        local integer p = S2I(DzGetTriggerSyncData())
+    // 프리셋 적용: 현재 장착을 이전 프리셋에 저장 → 전부 해제 → 새 프리셋 장착 (sync 안에서만 호출)
+    private function auxApplyPreset takes integer pid, integer p returns nothing
         local integer old = auxApplied[pid]
         local integer slot = 0
         local integer ridx
-        if p != auxView[pid] or p == old or p < 0 or p >= AUX_PRESETS then
+        if p == old or p < 0 or p >= AUX_PRESETS then
             return
         endif
 
@@ -908,8 +906,41 @@ scope UISkill initializer onInit
         set auxApplied[pid] = p
         call RecalcStats(pid)
         call AuxApplyHeroAbilities(pid)
+    endfunction
+
+    private function onSyncAuxApply takes nothing returns nothing
+        local integer pid = GetPlayerId(DzGetTriggerSyncPlayer())
+        local integer p = S2I(DzGetTriggerSyncData())
+        if p != auxView[pid] or p == auxApplied[pid] or p < 0 or p >= AUX_PRESETS then
+            return
+        endif
+        call auxApplyPreset(pid, p)
         call MsgSuccess(Player(pid), "보조스킬 프리셋 " + I2S(p + 1) + " 적용!")
         call update()
+    endfunction
+
+    // ============================================================
+    // 통합 프리셋(UIPreset)에서 쓰는 공개 함수
+    // ============================================================
+    function SkillAuxAppliedPreset takes integer pid returns integer
+        return auxApplied[pid]
+    endfunction
+
+    function SkillAuxPresetAt takes integer pid, integer p, integer slot returns integer
+        return presetAt(pid, p, slot)
+    endfunction
+
+    function SkillAuxPresetCount takes integer pid, integer p returns integer
+        return presetCount(pid, p)
+    endfunction
+
+    // 보조스킬 프리셋 p 적용 + 보조스킬창도 그 프리셋을 보게 함 (sync 핸들러 안에서만 호출)
+    function SkillAuxApplyPreset takes integer pid, integer p returns nothing
+        if p < 0 or p >= AUX_PRESETS then
+            return
+        endif
+        set auxView[pid] = p
+        call auxApplyPreset(pid, p)
     endfunction
 
     // ============================================================

@@ -532,6 +532,39 @@ scope UIAbility initializer onInit
         call RecalcStats(pid)
     endfunction
 
+    // ============================================================
+    // 통합 프리셋(UIPreset)에서 쓰는 공개 함수
+    // ============================================================
+    // 프리셋 p 의 전체 등급 (-1 = 미개방/빈 프리셋). peekBegin 과 같은 방식으로 잠깐 바꿔 읽고 되돌림
+    function AbilityPresetGrade takes integer pid, integer p returns integer
+        local integer applied
+        local integer g
+        if not AbilIsUnlocked(pid) or not AbilPresetRolled(pid, p) then
+            return -1
+        endif
+        set applied = AbilActivePreset(pid)
+        if p != applied then
+            call AbilSwitchPreset(pid, p)
+        endif
+        set g = AbilOverallGrade(pid)
+        if p != applied then
+            call AbilSwitchPreset(pid, applied)
+        endif
+        return g
+    endfunction
+
+    // 어빌리티 프리셋 p 적용 + 어빌리티창도 그 프리셋을 보게 함 (sync 핸들러 안에서만 호출)
+    function AbilityApplyPreset takes integer pid, integer p returns boolean
+        if not AbilIsUnlocked(pid) or p < 0 or p >= ABIL_PRESETS then
+            return false
+        endif
+        set abilViewRaw[pid] = 0
+        if p != AbilActivePreset(pid) then
+            call doPresetSwitch(pid, p)
+        endif
+        return true
+    endfunction
+
     // [적용하기] sync — 보고 있던 프리셋을 능력치에 적용
     private function onSyncPreset takes nothing returns nothing
         local string d = DzGetTriggerSyncData()
